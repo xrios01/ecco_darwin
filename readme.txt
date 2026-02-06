@@ -1,4 +1,4 @@
-# Project in ecco_darwin/code_util/LOAC/C_GEM/Elwha_River
+# Project in "ecco_darwin/code_util/LOAC/C_GEM/Elwha_River"
 
 # ECCO-Darwin Github Repository
 # https://github.com/MITgcm-contrib/ecco_darwin
