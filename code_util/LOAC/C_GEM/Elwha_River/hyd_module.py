@@ -3,7 +3,7 @@ Hydrodynamics module (translated from hyd.c)
 """
 
 from config import M, M1, M2, TOL, TS, DELTI
-from variables import D, Dold2, TH, E, TU, Y, DEPTH
+from variables import D, Dold2, TH, E, TU, Y, DEPTH, H, U
 from uphyd_module import new_bc, new_uh, update
 from tridag_module import coeff_a, tridag, conv
 from file_module import hydwrite
@@ -24,6 +24,8 @@ def hyd(t):
     # Iterative process to converge solution
     while rsum != 2.:
         i += 1
+        #if i % 100 == 0:
+        #   print(f"[DEBUG] hyd() iteration {i}, rsum={rsum}")
         coeff_a(t)
         tridag()
         rsum = conv(3, M1, TOL, TH, E) + conv(2, M2, TOL, TU, Y)
@@ -32,6 +34,10 @@ def hyd(t):
 
     # Update U and H values
     new_uh()
+
+    #print("[DEBUG] H[1:10]:", H[1:10])
+    #print("[DEBUG] U[2:10]:", U[2:10])
+    #print("[DEBUG] TH[M1]:", TH[M1])
 
     # Write hydrodynamic data to files at specified intervals
     if (float(t) / float(TS * DELTI)) % 1 == 0:
