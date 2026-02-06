@@ -1,130 +1,115 @@
-"""
-Biogeochemical reaction network module (translated from biogeo.c)
-"""
-
 import math
-from variables import v, DEPTH, M, vp, GPP, NPP_NO3, NPP_NH4, NPP, phy_death, Si_consumption, aer_deg, denit, nit,\
-    O2_ex, NEM, FCO2, Hplus
-
-# add in ", pCO2" if needed
-from config import (
-    KD1, KD2, Pbmax, alpha, kexcr, kgrowth, kmaint, kmort, redsi, redn,
-    redp, KdSi, KN, KPO4, Euler, kox, KTOC, KO2_ox, KO2_nit, KinO2, KNO3, knit, KNH4, kdenit, DELTI, TS, SIM_START_DATETIME, #use_real_pCO2
-)
-from fun_module import I0, Fhet, Fnit, O2sat, piston_velocity, K0_CO2, K1_CO2, K2_CO2, pH, KB
-from file_module import Rates
-from forcings_module import get_real_pCO2, get_discharge, get_sediment #, get_dummy_pCO2
+from datetime import datetime
 
 
-def biogeo(t):
-    """Biogeochemical reaction network simulation."""
-    piston_velocity(t)
+# GEOMETRICAL AND PHYSICAL PARAMETERS
+EL = 72000  # Estuarine length [m]
+DEPTH_lb = 30.0  # Depth at downstream boundary [m]
+DEPTH_ub = 3.2  # Depth at upstream boundary [m]
+B_lb = 30.0  # Width at downstream boundary [m]
+B_ub = 3.2  # Width at upstream boundary [m]
+RS = 1.0  # Storage width ratio
+rho_w = 1000.0  # Density of pure water [kg/m^3]
+G = 9.81  # Gravity acceleration [m/s^2]
+distance = 5  # Grid points in saline zone  (for experimentation set up to be half the distance of river in km (36 km))
 
-    for i in range(1, M + 1):
-        # Underwater light field and nutrient dependence
 
-        KD = KD1 + KD2 * (1000.0 * v['SPM']['c'][i] + 100.0)
-        Ebottom = max(1e-300, I0(t) * math.exp(-KD * DEPTH[i]))
-        psurf = I0(t) * alpha / Pbmax
-        pbot = Ebottom * alpha / Pbmax
+# HYDRODYNAMIC AND SEDIMENT PARAMETERS
+Chezy_lb = 60  # Chezy coefficient (downstream) [m^-1/2 s^-1]
+Chezy_ub = 40  # Chezy coefficient (upstream) [m^-1/2 s^-1]
+ws = 1.0e-3  # Settling velocity for sediment [m/s]
+tau_ero_lb = 0.4  # Erosion shear stress (downstream) [N/m^2]
+tau_dep_lb = 0.4  # Deposition shear stress (downstream) [N/m^2]
+tau_ero_ub = 1.0  # Erosion shear stress (upstream) [N/m^2]
+tau_dep_ub = 1.0  # Deposition shear stress (upstream) [N/m^2]
+Mero_lb = 3.5e-6  # Erosion coefficient (downstream) [mg/m^2 s]
+Mero_ub = 6.0e-8  # Erosion coefficient (upstream) [mg/m^2 s]
 
-        if I0(t) > 0 or Ebottom >= 1.e-300:
-            # Gamma approximation for surface
-            if psurf <= 1e-10:
-                appGAMMAsurf = 0.0
-            elif psurf <= 1.0:
-                appGAMMAsurf = -(
-                    math.log(psurf) + Euler - psurf
-                    + psurf**2 / 4.0 - psurf**3 / 18.0
-                    + psurf**4 / 96.0 - psurf**5 / 600.0
-                )
-            else:
-                appGAMMAsurf = math.exp(-psurf) * (
-                    1.0 / (psurf + 1.0 - (1.0 / (psurf + 3.0 - (4.0 / (psurf + 5.0 - (9.0 / (psurf + 7.0 - (16.0 / (psurf + 9.0)))))))))
-                )
 
-            # Gamma approximation for bottom
-            if pbot <= 1e-10:
-                appGAMMAbot = 0.0
-            elif pbot <= 1.0:
-                appGAMMAbot = -(
-                    math.log(pbot) + Euler + pbot
-                    - pbot**2 / 4.0 + pbot**3 / 18.0
-                    - pbot**4 / 96.0 + pbot**5 / 600.0
-                )
-            else:
-                appGAMMAbot = math.exp(-pbot) * (
-                    1.0 / (pbot + 1.0 - (1.0 / (pbot + 3.0 - (4.0 / (pbot + 5.0 - (9.0 / (pbot + 7.0 - (16.0 / (pbot + 9.0)))))))))
-                )
-            
-            # Safety check for Ebottom division
-            if Ebottom > 1e-10 and I0(t) > 1e-10:
-                ratio = I0(t) / Ebottom
-                if ratio > 1e-10:
-                    integral = (appGAMMAsurf - appGAMMAbot + math.log(ratio)) / KD
-                else:
-                    integral = 0.0
-            else:
-                integral = 0.0
-        else:
-            integral = 0.0  # ADD THIS LINE!
+# BIOGEOCHEMICAL PARAMETERS
+Pbmax = 2.58e-5  # Max photosynthetic rate [s^-1]
+alpha = 4.11e-7  # Photosynthetic efficiency [m^2 s/muE]
+KdSi = 1.07  # Silica constant [muM Si]
+KPO4 = 0.2  # Phosphate constant [muM P]
+KNH4 = 228.9  # Ammonium constant [muM N]
+KNO3 = 26.07  # Nitrate constant [muM N]
+KTOC = 186.25  # Organic matter constant [muM C]
+KO2_ox = 31.0  # Oxygen constant [muM O2]
+KO2_nit = 51.25  # Oxygen constant [muM O2]
+KN = 1.13  # Dissolved nitrogen constant [muM N]
+KinO2 = 33.0  # Denitrification inhibition term [muM O2]
+redsi = 16.0 / 80.0  # Redfield ratio for silica
+redn = 16.0 / 106.0  # Redfield ratio for nitrogen
+redp = 1.0 / 106.0  # Redfield ratio for phosphorus
+kmaint = 4.6e-7  # Maintenance rate constant [s^-1]
+kmort = 1.56e-6  # Phytoplankton mortality [s^-1]
+kexcr = 5e-2  # Excretion constant [-]
+kgrowth = 2.9e-1  # Growth constant [-]
+KD1 = 1.3  # Background extinction coefficient [m^-1]
+KD2 = 0.06  # Suspended matter attenuation [mg^-1 m^-1]
+kox = 6.08e-4  # Aerobic degradation rate [muM C s^-1]
+kdenit = 5.05e-4  # Denitrification rate [muM C s^-1]
+knit = 2.73e-5  # Nitrification rate [muM C s^-1]
 
-        nlim = (
-            0.0 if v['dSi']['c'][i] <= 0.0
-            else v['dSi']['c'][i] / (v['dSi']['c'][i] + KdSi)
-            * (v['NO3']['c'][i] + v['NH4']['c'][i]) / (v['NH4']['c'][i] + v['NO3']['c'][i] + KN)
-            * (v['PO4']['c'][i] / (v['PO4']['c'][i] + KPO4))
-        )
-        fNH4 = 0.0 if v['NH4']['c'][i] <= 0.0 else v['NH4']['c'][i] / (10.0 + v['NH4']['c'][i])
 
-        # Biogeochemical reaction rates [mmol m^-3 s^-1]
-        GPP[i] = Pbmax * v['DIA']['c'][i] * nlim * integral
-        NPP_NO3[i] = (1.0 - fNH4) * ((GPP[i] / DEPTH[i]) * (1.0 - kexcr) * (1.0 - kgrowth) - kmaint * v['DIA']['c'][i])
-        NPP_NH4[i] = fNH4 * ((GPP[i] / DEPTH[i]) * (1.0 - kexcr) * (1.0 - kgrowth) - kmaint * v['DIA']['c'][i])
-        NPP[i] = NPP_NO3[i] + NPP_NH4[i]
-        phy_death[i] = kmort * v['DIA']['c'][i]
-        Si_consumption[i] = max(0.0, redsi * NPP[i])
-        aer_deg[i] = kox * Fhet(t) * v['TOC']['c'][i] / (v['TOC']['c'][i] + KTOC) * v['O2']['c'][i] / (v['O2']['c'][i] + KO2_ox)
-        denit[i] = kdenit * Fhet(t) * v['TOC']['c'][i] / (v['TOC']['c'][i] + KTOC) * KinO2 / (v['O2']['c'][i] + KinO2) * v['NO3']['c'][i] / (v['NO3']['c'][i] + KNO3)
-        nit[i] = knit * Fnit(t) * v['O2']['c'][i] / (v['O2']['c'][i] + KO2_nit) * v['NH4']['c'][i] / (v['NH4']['c'][i] + KNH4)
-        O2_ex[i] = (vp[i] / DEPTH[i]) * (O2sat(t, i) - v['O2']['c'][i])
-        NEM[i] = NPP[i] - aer_deg[i] - denit[i]
+# EXTERNAL FORCINGS
+Qr = -47.7  # River discharge [m^3/s]  ################# (negative == downstream) (input value as negated)
+AMPL = 3.5  # Tidal amplitude at mouth [m]
+pfun = 0.0830  # Tidal frequency [cycle/hr]
+Uw_sal = 4.39  # Wind speed in saline estuary [m/s]
+Uw_tid = 2.195  # Wind speed in tidal river [m/s]
+water_temp = 10  # Water temperature [C]
+pCO2 = 380 * 1e-6  # CO2 partial pressure in the atmosphere [atm]  ################## (change to time series) (test first with sine
+#use_real_pCO2 = True # toggle wheather to use the real world pCO2 time series or dummy sine wave function 
+series_info = {
+    'wind_speed': ('POWER_Point_Daily_CLEANED.csv', 'datetime', 'WS2M'),
+    'discharge': ('Elwha_Cleaned_Discharge.csv', 'datetime', 'discharge_cms'), ###### dictionary to hold time series' to be interpolated
+    'pCO2': ('usgs_elwha_pCO2_timeseries_2011_2016.csv', ('Year', 'Month', 'Day'), 'CO2_Value'), ##### include files in working directory 
+    'water_temp': ('Cleaned_Water_Temperature_Data.csv', 'Datetime', 'Temperature_C'),
+    'sediment': ('Elwha_Cleaned_SSC_Timeseries.csv', 'Day', 'Daily SSC (mg/L)')   
+      # Add more as needed in this format
+}
 
-        # Estimate pH (Follows et al., 2006)
-        Hplus[i] = pH(t, i, 10**(-v['pH']['c'][i]), v['S']['c'][i], v['DIC']['c'][i], v['ALK']['c'][i], KB(t, i), K1_CO2(t, i), K2_CO2(t, i))  # mol/kg or mmol m-3
-        # Evaluate[CO2*]
-        co2s = v['DIC']['c'][i] / (1.0 + (K1_CO2(t, i) / Hplus[i]) + (K1_CO2(t, i) * K2_CO2(t, i) / (Hplus[i] * Hplus[i])))  # mol/kg or mmol m-3
-        # CO2 fluxes
-        vpCO2 = 0.915 * vp[i]  # convert O2 piston velocity to CO2 piston velocity (Regnier et al., 2002) [m/s]
-        
-        #if use_real_pCO2:
-        atm_pco2 = get_real_pCO2(t, SIM_START_DATETIME) # gets real world time series of pCO2 at 34 N lat starting 1/1/2011 [atm]
-        #else: 
-        #    atm_pco2 = get_dummy_pCO2(t, SIM_START_DATETIME) # simulate a time series of pCO2 (testing with sine wave) [atm]
 
-        RCO2 = - vpCO2 * (co2s - K0_CO2(t, i) * atm_pco2)  # rate of exchange mmol C m^−2 s^−1
-        FCO2[i] = RCO2 / DEPTH[i]  # CO2 flux mmol C m^−3 s^−1
+# OTHER PARAMETERS
+Euler = 0.5772156649  # Euler's constant
+PI = math.pi  # Pi value
+pH_ite = 50  # number of iterations to converge to pH following Follows et al., 2006
+mass_mol_B = 10.8110  # molar mass of Boron g/mol
 
-        # Update biogeochemical state variables [mmol m^-3]
-        v['DIA']['c'][i] = v['DIA']['c'][i] + (NPP[i] - phy_death[i]) * DELTI
-        v['dSi']['c'][i] = v['dSi']['c'][i] - Si_consumption[i] * DELTI
-        v['NO3']['c'][i] = v['NO3']['c'][i] + (-94.4 / 106.0 * denit[i] + nit[i] - redn * NPP_NO3[i]) * DELTI
-        v['NH4']['c'][i] = v['NH4']['c'][i] + (redn * (aer_deg[i] - NPP_NH4[i]) - nit[i]) * DELTI
-        v['PO4']['c'][i] = v['PO4']['c'][i] + redp * (aer_deg[i] + denit[i] - NPP[i]) * DELTI
-        v['O2']['c'][i] = v['O2']['c'][i] + (-aer_deg[i] + NPP_NH4[i] + (138.0 / 106.0) * NPP_NO3[i] - 2.0 * nit[i] + O2_ex[i]) * DELTI
-        v['TOC']['c'][i] = v['TOC']['c'][i] + (-aer_deg[i] - denit[i] + phy_death[i]) * DELTI
-        v['DIC']['c'][i] = v['DIC']['c'][i] + (FCO2[i] - NPP_NO3[i] - NPP_NH4[i] + aer_deg[i] + denit[i]) * DELTI
-        v['ALK']['c'][i] = v['ALK']['c'][i] + (((15 / 106) * aer_deg[i]) + ((93.4 / 106) * denit[i]) - (2 * nit[i])
-                                               - ((15 / 106) * NPP_NH4[i]) + ((17 / 106) * NPP_NO3[i])) * DELTI
-        v['pH']['c'][i] = -math.log10(Hplus[i])  # mol/kg or mmol m-3
 
-        # Write biogeochemical process rates [mmol m^-3 s-1]
-    if (float(t) / float(TS * DELTI)) % 1 == 0:
-        Rates(NPP, "NPP.dat", t)
-        Rates(aer_deg, "aer_deg.dat", t)
-        Rates(denit, "denit.dat", t)
-        Rates(nit, "nit.dat", t)
-        Rates(O2_ex, "O2_ex.dat", t)
-        Rates(NEM, "NEM.dat", t)
-        Rates(phy_death, "phy_death.dat", t)
-        Rates(FCO2, "FCO2.dat", t)
+# DEVELOPER MODE SETTINGS
+DEVELOPER_MODE = False  # set to False for full production runs
+DEBUG_PLOT_FOR_INTERP_ARRAYS = True  # toggle to plot of interpolated arrays for debugging
+# USE_WARMUP_DISCHARGE = False  # toggle warmup feature in get_discharge
+
+
+# NUMERICAL INTEGRATION
+SIM_START_DATETIME = datetime(2011, 9, 15)  # start date fo the model's time series post WARMUP
+# Time settings based on mode
+if DEVELOPER_MODE:
+    # test mode: 1 year warmup + 1 year simulation = 2 years total
+    WARMUP_YEARS = 1
+    SIMULATION_YEARS = 1
+    print("\033[33mDEVELOPER MODE: Using 1-year warmup + 1-year simulation\033[0m")
+else:
+    # production mode: 2 year warmup + 5 year simulation = 7 years total  (2 year warmup then 2011-2016)
+    WARMUP_YEARS = 2
+    SIMULATION_YEARS = 5
+    print("\033[32mPRODUCTION MODE: Using 2-year warmup + 5-year simulation\033[0m")
+
+MAXT = (365 * (WARMUP_YEARS + SIMULATION_YEARS)) * 24 * 60 * 60  # Max time [s]  (roughly 217 million sec or 7 years) (len(WARMUP) + len(time series'))
+WARMUP = (365 * WARMUP_YEARS) * 24 * 60 * 60  # Warmup period [s] (roughly 62 million sec or 2 years)
+DELTI = 150  # Delta t [s]
+TS = 12  # Save every TS timesteps
+DELXI = 1000  # Delta x [m]
+TOL = 1e-10  # Convergence criterion
+M = int(EL / DELXI) + 1  # Max even grid points
+if M % 2 == 0:
+    pass
+else:
+    M = M - 1
+M1 = M - 1  # Max odd grid points
+M2 = M - 2  # Last even grid point
+M3 = M - 3  # Last odd grid point
+MAXV = 12  # Max species in chemical array
