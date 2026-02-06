@@ -9,6 +9,9 @@ from transport_module import transport
 from biogeo_module import biogeo
 from sed_module import sed
 from config import MAXT, DELTI, WARMUP
+from pre_model_stratup_check import check_output_writability
+from forcings_module import get_sediment
+from variables import v, M
 
 def main():
     """Main model routine."""
@@ -27,6 +30,11 @@ def main():
         # Print the number of simulated days
         print(f"t: {float(t) / (24.0 * 60.0 * 60.0):.2f} days")
 
+        # apply sediment forcing at upstream boundary before hyd andtransport
+        #if t > WARMUP:
+            # apply sediment time series only at upstream boundary 
+        #    v['SPM']['c'][M] = get_sediment(t)
+
         # Run hydrodynamics and transport processes
         hyd(t)
         transport(t)
@@ -35,6 +43,46 @@ def main():
         if t > WARMUP:
             biogeo(t)
             sed(t)
+    print("[STATUS]: \033[92mModel run completed successfully.\033[0m")
 
 if __name__ == "__main__":
+
+# list of all output files to write to
+    output_files = [
+    "depth.dat",     # water depth data
+    "width.dat",     # estuarine width data
+    "S.dat",         # salinity data
+    "SPM.dat",       # suspended particulate matter concentrations
+    "DIA.dat",       # diatoms concentrations
+    "NH4.dat",       # ammonium concentrations
+    "NO3.dat",       # nitrate concentrations
+    "O2.dat",        # oxygen concentrations
+    "PO4.dat",       # phosphate concentrations
+    "DSi.dat",       # dissolved silica concentrations
+    "TOC.dat",       # total organic carbon concentrations
+    "NPP.dat",       # Net Primary Production rates
+    "aer_deg.dat",   # aerobic degradation rates
+    "denit.dat",     # denitrification rates
+    "nit.dat",       # nitrification rates
+    "O2_ex.dat",     # air-water O₂ exchange rates
+    "NEM.dat",       # Net Ecosystem Metabolism rates
+
+    #erosion and deposition
+    "erosion.dat",   # erosion rates
+    "deposition.dat",# deposition rates
+
+    # velocity
+    "U.dat",  # velocity data
+
+    # FCO2 version outputs:
+    "DIC.dat",       # dissolved inorganic carbon concentration
+    "ALK.dat",       # alkalinity
+    "pH.dat",        # pH
+    "FCO2.dat"       # air-water CO₂ exchange rates
+    ]
+
+    if not check_output_writability(output_files):
+        exit("\033[31mAborting: one or more files are locked or not writable.\033[0m")
+
+
     main()
