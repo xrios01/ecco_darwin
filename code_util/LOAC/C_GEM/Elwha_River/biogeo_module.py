@@ -5,12 +5,16 @@ Biogeochemical reaction network module (translated from biogeo.c)
 import math
 from variables import v, DEPTH, M, vp, GPP, NPP_NO3, NPP_NH4, NPP, phy_death, Si_consumption, aer_deg, denit, nit,\
     O2_ex, NEM, FCO2, Hplus
+
+# add in ", pCO2" if needed
 from config import (
     KD1, KD2, Pbmax, alpha, kexcr, kgrowth, kmaint, kmort, redsi, redn,
-    redp, KdSi, KN, KPO4, Euler, kox, KTOC, KO2_ox, KO2_nit, KinO2, KNO3, knit, KNH4, kdenit, DELTI, TS, pCO2
+    redp, KdSi, KN, KPO4, Euler, kox, KTOC, KO2_ox, KO2_nit, KinO2, KNO3, knit, KNH4, kdenit, DELTI, TS, SIM_START_DATETIME, #use_real_pCO2
 )
 from fun_module import I0, Fhet, Fnit, O2sat, piston_velocity, K0_CO2, K1_CO2, K2_CO2, pH, KB
 from file_module import Rates
+from forcings_module import get_real_pCO2, get_discharge, get_sediment #, get_dummy_pCO2
+
 
 def biogeo(t):
     """Biogeochemical reaction network simulation."""
@@ -18,14 +22,17 @@ def biogeo(t):
 
     for i in range(1, M + 1):
         # Underwater light field and nutrient dependence
+
         KD = KD1 + KD2 * (1000.0 * v['SPM']['c'][i] + 100.0)
-        Ebottom = I0(t) * math.exp(-KD * DEPTH[i])
+        Ebottom = max(1e-300, I0(t) * math.exp(-KD * DEPTH[i]))
         psurf = I0(t) * alpha / Pbmax
         pbot = Ebottom * alpha / Pbmax
 
         if I0(t) > 0 or Ebottom >= 1.e-300:
             # Gamma approximation for surface
-            if psurf <= 1.0:
+            if psurf <= 1e-10:
+                appGAMMAsurf = 0.0
+            elif psurf <= 1.0:
                 appGAMMAsurf = -(
                     math.log(psurf) + Euler - psurf
                     + psurf**2 / 4.0 - psurf**3 / 18.0
@@ -37,7 +44,9 @@ def biogeo(t):
                 )
 
             # Gamma approximation for bottom
-            if pbot <= 1.0:
+            if pbot <= 1e-10:
+                appGAMMAbot = 0.0
+            elif pbot <= 1.0:
                 appGAMMAbot = -(
                     math.log(pbot) + Euler + pbot
                     - pbot**2 / 4.0 + pbot**3 / 18.0
@@ -47,9 +56,18 @@ def biogeo(t):
                 appGAMMAbot = math.exp(-pbot) * (
                     1.0 / (pbot + 1.0 - (1.0 / (pbot + 3.0 - (4.0 / (pbot + 5.0 - (9.0 / (pbot + 7.0 - (16.0 / (pbot + 9.0)))))))))
                 )
-            integral = (appGAMMAsurf - appGAMMAbot + math.log(I0(t) / Ebottom)) / KD
+            
+            # Safety check for Ebottom division
+            if Ebottom > 1e-10 and I0(t) > 1e-10:
+                ratio = I0(t) / Ebottom
+                if ratio > 1e-10:
+                    integral = (appGAMMAsurf - appGAMMAbot + math.log(ratio)) / KD
+                else:
+                    integral = 0.0
+            else:
+                integral = 0.0
         else:
-            integral = 0.0
+            integral = 0.0  # ADD THIS LINE!
 
         nlim = (
             0.0 if v['dSi']['c'][i] <= 0.0
@@ -78,7 +96,13 @@ def biogeo(t):
         co2s = v['DIC']['c'][i] / (1.0 + (K1_CO2(t, i) / Hplus[i]) + (K1_CO2(t, i) * K2_CO2(t, i) / (Hplus[i] * Hplus[i])))  # mol/kg or mmol m-3
         # CO2 fluxes
         vpCO2 = 0.915 * vp[i]  # convert O2 piston velocity to CO2 piston velocity (Regnier et al., 2002) [m/s]
-        RCO2 = - vpCO2 * (co2s - K0_CO2(t, i) * pCO2)  # rate of exchange mmol C m^−2 s^−1
+        
+        #if use_real_pCO2:
+        atm_pco2 = get_real_pCO2(t, SIM_START_DATETIME) # gets real world time series of pCO2 at 34 N lat starting 1/1/2011 [atm]
+        #else: 
+        #    atm_pco2 = get_dummy_pCO2(t, SIM_START_DATETIME) # simulate a time series of pCO2 (testing with sine wave) [atm]
+
+        RCO2 = - vpCO2 * (co2s - K0_CO2(t, i) * atm_pco2)  # rate of exchange mmol C m^−2 s^−1
         FCO2[i] = RCO2 / DEPTH[i]  # CO2 flux mmol C m^−3 s^−1
 
         # Update biogeochemical state variables [mmol m^-3]
