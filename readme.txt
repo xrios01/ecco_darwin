@@ -1,4 +1,5 @@
-## Project in "ecco_darwin/code_util/LOAC/C_GEM/Elwha_River"
+** NASA JPL summer 2025 project **
+** Project in "ecco_darwin/code_util/LOAC/C_GEM/Elwha_River" **
 
 # ECCO-Darwin Github Repository
 # https://github.com/MITgcm-contrib/ecco_darwin
